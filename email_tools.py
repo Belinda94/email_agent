@@ -1,6 +1,7 @@
 import email
 import imaplib
 import os
+import re
 from email.header import decode_header
 
 from dotenv import load_dotenv
@@ -9,15 +10,22 @@ load_dotenv()
 
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
+ALL_MAIL = '"[Gmail]/All Mail"'
+MAX_LIMIT = 50
 
 
-def connect():
-    """Open an authenticated IMAP connection to Gmail and select the inbox."""
+def connect(mailbox="INBOX"):
+    """Open an authenticated IMAP connection to Gmail and select a mailbox.
+
+    Defaults to INBOX. Pass ALL_MAIL when a search needs to see archived
+    messages as well - a label search restricted to INBOX would miss
+    anything already filed away.
+    """
     address = os.getenv("GMAIL_ADDRESS")
     password = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "")
     mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
     mail.login(address, password)
-    mail.select("INBOX")
+    mail.select(mailbox)
     return mail
 
 
@@ -41,20 +49,32 @@ def to_imap_date(date_str):
     return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d-%b-%Y")
 
 
-def build_criteria(query, sender, after, before, unread_only):
-    """Assemble an IMAP search string from the supplied filters."""
+def build_criteria(query, sender, recipient, after, before,
+                   unread_only, label, has_attachment):
+    """Assemble an IMAP search string from the supplied filters.
+
+    Most of these are standard IMAP. Two are Gmail extensions:
+    X-GM-LABELS matches a Gmail label, and X-GM-RAW accepts Gmail's own
+    search syntax, which is the only reliable way to filter on attachments.
+    """
     criteria = []
 
     if query:
         criteria.append(f'TEXT "{query}"')
     if sender:
         criteria.append(f'FROM "{sender}"')
+    if recipient:
+        criteria.append(f'TO "{recipient}"')
     if after:
         criteria.append(f'SINCE "{to_imap_date(after)}"')
     if before:
         criteria.append(f'BEFORE "{to_imap_date(before)}"')
     if unread_only:
         criteria.append("UNSEEN")
+    if label:
+        criteria.append(f'X-GM-LABELS "{label}"')
+    if has_attachment:
+        criteria.append('X-GM-RAW "has:attachment"')
 
     if not criteria:
         return "ALL"
@@ -77,16 +97,24 @@ def parse_headers(raw):
     return headers
 
 
-def search_emails(query=None, sender=None, after=None, before=None,
-                  unread_only=False, limit=20):
-    """Search the inbox and return summaries of the newest matching messages.
+def search_emails(query=None, sender=None, recipient=None, after=None,
+                  before=None, unread_only=False, label=None,
+                  has_attachment=False, limit=20):
+    """Search Gmail and return summaries of the newest matching messages.
 
     Returns a list of dicts with email_id, subject, sender, and date.
     The body is deliberately not included - use get_email for that.
+
+    Searches INBOX by default. When a label is given, searches All Mail
+    instead, since labelled messages are often archived and would otherwise
+    be invisible.
     """
-    mail = connect()
+    limit = max(1, min(limit, MAX_LIMIT))
+    mailbox = ALL_MAIL if label else "INBOX"
+    mail = connect(mailbox)
     try:
-        criteria = build_criteria(query, sender, after, before, unread_only)
+        criteria = build_criteria(query, sender, recipient, after, before,
+                                  unread_only, label, has_attachment)
         status, data = mail.search(None, criteria)
 
         if status != "OK":
@@ -123,6 +151,33 @@ def search_emails(query=None, sender=None, after=None, before=None,
         mail.logout()
 
 
+def html_to_text(html):
+    """Strip HTML down to readable text.
+
+    Marketing email often has no plain-text part at all, so the fallback is
+    a wall of tags, inline CSS and tracking pixels. Feeding that to the model
+    wastes context and buries the actual message. This is deliberately crude
+    - it is not a parser, just enough to recover the words.
+    """
+    # Drop whole blocks whose contents are never readable text.
+    html = re.sub(r"<(script|style|head)[^>]*>.*?</\1>", " ", html,
+                  flags=re.DOTALL | re.IGNORECASE)
+    # Turn block-level breaks into newlines so paragraphs survive.
+    html = re.sub(r"<br\s*/?>|</p>|</div>|</tr>|</h[1-6]>", "\n", html,
+                  flags=re.IGNORECASE)
+    # Remove every remaining tag.
+    html = re.sub(r"<[^>]+>", " ", html)
+    # Unescape the handful of entities that actually show up.
+    for entity, char in [("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"),
+                         ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'"),
+                         ("&mdash;", "-"), ("&ndash;", "-")]:
+        html = html.replace(entity, char)
+    # Collapse the whitespace the substitutions left behind.
+    html = re.sub(r"[ \t]+", " ", html)
+    html = re.sub(r"\n\s*\n\s*\n+", "\n\n", html)
+    return html.strip()
+
+
 def extract_body(msg, max_chars=4000):
     """Pull readable plain text out of a parsed message.
 
@@ -138,7 +193,10 @@ def extract_body(msg, max_chars=4000):
         if payload is None:
             return ""
         charset = msg.get_content_charset() or "utf-8"
-        return payload.decode(charset, errors="replace")[:max_chars]
+        text = payload.decode(charset, errors="replace")
+        if msg.get_content_type() == "text/html":
+            text = html_to_text(text)
+        return text[:max_chars]
 
     plain_text = ""
     html_fallback = ""
@@ -163,9 +221,10 @@ def extract_body(msg, max_chars=4000):
             html_fallback = text
 
     # Prefer plain text. Fall back to HTML only when there is no plain part,
-    # which happens with marketing email.
-    body = plain_text or html_fallback
-    return body[:max_chars]
+    # which happens with marketing email - and strip it first.
+    if plain_text:
+        return plain_text[:max_chars]
+    return html_to_text(html_fallback)[:max_chars]
 
 
 def list_attachments(msg):
@@ -210,7 +269,42 @@ def get_email(email_id):
         mail.logout()
 
 
+def list_labels():
+    """Return the Gmail labels on this account.
+
+    Gmail exposes labels as IMAP mailboxes. The raw response looks like
+    b'(\\HasNoChildren) "/" "Receipts"' - the label name is the quoted
+    string at the end. Gmail's own system folders live under [Gmail] and
+    are filtered out, since they are not labels the user created.
+    """
+    mail = connect()
+    try:
+        status, data = mail.list()
+        if status != "OK":
+            return []
+
+        labels = []
+        for line in data:
+            if line is None:
+                continue
+            decoded = line.decode("utf-8", errors="replace")
+            parts = decoded.split(' "/" ')
+            if len(parts) != 2:
+                continue
+            name = parts[1].strip().strip('"')
+            if name.startswith("[Gmail]"):
+                continue
+            labels.append(name)
+        return labels
+    finally:
+        mail.logout()
+
+
 if __name__ == "__main__":
+    print("--- Your labels ---")
+    print(", ".join(list_labels()) or "none found")
+
+    print()
     print("--- Newest 3 in inbox ---")
     recent = search_emails(limit=3)
     for item in recent:
@@ -228,3 +322,8 @@ if __name__ == "__main__":
         print("Attachments:", full["attachments"] or "none")
         print("Body preview:")
         print(full["body"][:400])
+
+    print()
+    print("--- With attachments, newest 3 ---")
+    for item in search_emails(has_attachment=True, limit=3):
+        print(f"[{item['email_id']}] {item['subject'][:60]}")
