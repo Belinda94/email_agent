@@ -14,12 +14,18 @@ ALL_MAIL = '"[Gmail]/All Mail"'
 MAX_LIMIT = 50
 
 
-def connect(mailbox="INBOX"):
+def connect(mailbox=ALL_MAIL):
     """Open an authenticated IMAP connection to Gmail and select a mailbox.
 
-    Defaults to INBOX. Pass ALL_MAIL when a search needs to see archived
-    messages as well - a label search restricted to INBOX would miss
-    anything already filed away.
+    Always selects All Mail by default, and every id this module hands out
+    is a UID from that mailbox.
+
+    The reason matters: plain IMAP message numbers are POSITIONS within
+    whichever mailbox is selected, so message 5547 in INBOX and message
+    5547 in All Mail are different emails, and both shift as mail arrives.
+    Searching one mailbox and fetching from another silently returns the
+    wrong message. Working in a single mailbox and using UIDs, which are
+    stable, removes that whole class of bug.
     """
     address = os.getenv("GMAIL_ADDRESS")
     password = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "")
@@ -73,6 +79,12 @@ def build_criteria(query, sender, recipient, after, before,
         criteria.append("UNSEEN")
     if label:
         criteria.append(f'X-GM-LABELS "{label}"')
+    elif not recipient:
+        # Default scope is the inbox. Since we are always selected on All
+        # Mail, that has to be expressed as a search term rather than by
+        # choosing a mailbox. A label search or a sent-mail search is
+        # deliberately allowed to range wider.
+        criteria.append('X-GM-RAW "in:inbox"')
     if has_attachment:
         criteria.append('X-GM-RAW "has:attachment"')
 
@@ -105,17 +117,17 @@ def search_emails(query=None, sender=None, recipient=None, after=None,
     Returns a list of dicts with email_id, subject, sender, and date.
     The body is deliberately not included - use get_email for that.
 
-    Searches INBOX by default. When a label is given, searches All Mail
-    instead, since labelled messages are often archived and would otherwise
-    be invisible.
+    Ids returned are UIDs in All Mail - stable, and safe to pass straight
+    to get_email. Scope defaults to the inbox; a label filter or a
+    recipient filter widens it to all mail, since labelled messages are
+    usually archived and sent mail never appears in the inbox at all.
     """
     limit = max(1, min(limit, MAX_LIMIT))
-    mailbox = ALL_MAIL if label else "INBOX"
-    mail = connect(mailbox)
+    mail = connect()
     try:
         criteria = build_criteria(query, sender, recipient, after, before,
                                   unread_only, label, has_attachment)
-        status, data = mail.search(None, criteria)
+        status, data = mail.uid("SEARCH", None, criteria)
 
         if status != "OK":
             return []
@@ -129,7 +141,8 @@ def search_emails(query=None, sender=None, recipient=None, after=None,
 
         results = []
         for msg_id in recent:
-            status, msg_data = mail.fetch(
+            status, msg_data = mail.uid(
+                "FETCH",
                 msg_id,
                 "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])",
             )
@@ -244,12 +257,13 @@ def list_attachments(msg):
 def get_email(email_id):
     """Fetch one message in full, including its body text.
 
-    Takes an email_id as returned by search_emails. Returns a dict, or None
-    if the id does not resolve to a message.
+    Takes an email_id as returned by search_emails - a UID in All Mail.
+    Returns a dict, or None if the id does not resolve to a message.
     """
     mail = connect()
     try:
-        status, msg_data = mail.fetch(str(email_id), "(BODY.PEEK[])")
+        # UID FETCH, matching the UIDs search_emails handed out.
+        status, msg_data = mail.uid("FETCH", str(email_id), "(BODY.PEEK[])")
 
         if status != "OK" or not msg_data or msg_data[0] is None:
             return None
