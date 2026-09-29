@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --teal:#1F6F78;
+    --ink:#1A1A1A;
+    --ink-soft:#5A5A5A;
+    --line:#E2E2E2;
+    --bg:#FAFAF8;
+    --card:#FFFFFF;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:'Inter', system-ui, sans-serif;
+    line-height:1.55;
+  }
+  .wrap{ max-width:760px; margin:0 auto; padding:48px 24px 80px; }
+
+  header{ border-bottom:1px solid var(--line); padding-bottom:20px; margin-bottom:28px; }
+  h1{ font-size:24px; margin:0 0 6px; letter-spacing:-0.01em; }
+  .sub{ color:var(--ink-soft); font-size:14px; margin:0; }
+  .badge{
+    display:inline-block; font-family:'IBM Plex Mono', monospace;
+    font-size:11px; color:var(--teal); border:1px solid var(--teal);
+    border-radius:3px; padding:2px 7px; margin-left:8px; vertical-align:2px;
+  }
+
+  form{ display:flex; gap:10px; margin-bottom:12px; }
+  input[type=text]{
+    flex:1; padding:12px 14px; font-size:15px; font-family:inherit;
+    border:1px solid var(--line); border-radius:6px; background:var(--card);
+    color:var(--ink);
+  }
+  input[type=text]:focus{ outline:none; border-color:var(--teal); }
+  button{
+    padding:12px 20px; font-size:15px; font-family:inherit; font-weight:600;
+    background:var(--teal); color:#fff; border:none; border-radius:6px;
+    cursor:pointer;
+  }
+  button:disabled{ opacity:0.5; cursor:default; }
+
+  .examples{ font-size:13px; color:var(--ink-soft); margin:0 0 32px; }
+  .examples button{
+    background:none; border:none; color:var(--teal); font-size:13px;
+    font-weight:500; padding:0 2px; cursor:pointer; text-decoration:underline;
+  }
+
+  .exchange{ margin-bottom:36px; }
+  .asked{
+    font-weight:600; font-size:16px; margin:0 0 14px;
+    padding-left:12px; border-left:3px solid var(--teal);
+  }
+  .trace{
+    background:#F4F4F1; border:1px solid var(--line); border-radius:6px;
+    padding:12px 14px; margin-bottom:16px;
+    font-family:'IBM Plex Mono', monospace; font-size:12.5px;
+    color:var(--ink-soft); overflow-x:auto;
+  }
+  .trace-label{
+    display:block; font-size:10.5px; letter-spacing:0.08em;
+    text-transform:uppercase; color:#8A8A8A; margin-bottom:8px;
+  }
+  .trace div{ white-space:pre; }
+  .trace .arrow{ color:var(--teal); font-weight:600; }
+  .answer{ white-space:pre-wrap; font-size:15px; margin:0; }
+  .thinking{ color:var(--ink-soft); font-style:italic; font-size:14px; }
+
+  footer{
+    margin-top:48px; padding-top:20px; border-top:1px solid var(--line);
+    font-family:'IBM Plex Mono', monospace; font-size:12px; color:#8A8A8A;
+  }
+  footer a{ color:var(--teal); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Email Agent <span class="badge">READ-ONLY</span></h1>
+    <p class="sub">Ask a question about the inbox. The agent chooses its own tools; every call it makes is shown.</p>
+  </header>
+
+  <form id="form">
+    <input type="text" id="q" placeholder="e.g. what did micro1 send me?" autocomplete="off" required>
+    <button type="submit" id="go">Ask</button>
+  </form>
+
+  <p class="examples">
+    Try:
+    <button type="button" class="ex">what's new in my inbox?</button> ·
+    <button type="button" class="ex">what labels do I have?</button> ·
+    <button type="button" class="ex">delete all my newsletters</button>
+  </p>
+
+  <div id="out"></div>
+
+  <footer>
+    Python · Anthropic API · IMAP —
+    <a href="https://github.com/Belinda94/email_agent" target="_blank" rel="noopener">source on GitHub</a>
+  </footer>
+
+</div>
+
+<script>
+  const form = document.getElementById('form');
+  const input = document.getElementById('q');
+  const go = document.getElementById('go');
+  const out = document.getElementById('out');
+
+  document.querySelectorAll('.ex').forEach(b => {
+    b.addEventListener('click', () => {
+      input.value = b.textContent;
+      form.requestSubmit();
+    });
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const question = input.value.trim();
+    if (!question) return;
+
+    go.disabled = true;
+    input.value = '';
+
+    const block = document.createElement('div');
+    block.className = 'exchange';
+    block.innerHTML =
+      '<p class="asked"></p><p class="thinking">Working…</p>';
+    block.querySelector('.asked').textContent = question;
+    out.prepend(block);
+
+    try {
+      const res = await fetch('/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question })
+      });
+      const data = await res.json();
+
+      block.querySelector('.thinking').remove();
+
+      if (data.trace && data.trace.length) {
+        const t = document.createElement('div');
+        t.className = 'trace';
+        const label = document.createElement('span');
+        label.className = 'trace-label';
+        label.textContent = 'Tool calls';
+        t.appendChild(label);
+        data.trace.forEach(line => {
+          const row = document.createElement('div');
+          const arrow = document.createElement('span');
+          arrow.className = 'arrow';
+          arrow.textContent = '-> ';
+          row.appendChild(arrow);
+          row.appendChild(document.createTextNode(line));
+          t.appendChild(row);
+        });
+        block.appendChild(t);
+      }
+
+      const a = document.createElement('p');
+      a.className = 'answer';
+      a.textContent = data.answer;
+      block.appendChild(a);
+    } catch (err) {
+      block.querySelector('.thinking').textContent = 'Request failed: ' + err;
+    } finally {
+      go.disabled = false;
+      input.focus();
+    }
+  });
+</script>
+</body>
+</html>

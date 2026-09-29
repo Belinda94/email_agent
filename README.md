@@ -128,7 +128,7 @@ Anthropic API key.
 git clone <this repo>
 cd email-agent
 python3 -m venv .venv && source .venv/bin/activate
-pip install anthropic python-dotenv
+pip install anthropic python-dotenv fastapi uvicorn
 ```
 
 Create a Gmail app password at `myaccount.google.com/apppasswords`, then a
@@ -145,7 +145,12 @@ ANTHROPIC_API_KEY=sk-ant-...
 ```bash
 python agent.py "what's new in my inbox?"   # one question
 python agent.py                              # interactive
+uvicorn web:app --reload                     # browser, at 127.0.0.1:8000
 ```
+
+The browser interface shows the tool calls above each answer, which the
+command line also prints. That trace is the point: it is the difference
+between an agent choosing its own tools and a chatbot guessing.
 
 `python diagnose.py` lists the mailboxes your account exposes over IMAP,
 which is useful if folder names differ from the defaults.

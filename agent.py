@@ -72,8 +72,13 @@ def run_tool(name, arguments):
     return json.dumps(result, indent=2, default=str)
 
 
-def ask(question, verbose=True):
-    """Answer one question about the inbox, using tools as needed."""
+def ask(question, verbose=True, on_tool_call=None):
+    """Answer one question about the inbox, using tools as needed.
+
+    on_tool_call, if given, is called with (name, arguments) each time the
+    model requests a tool. The CLI uses it to print the trace; the web
+    interface uses it to collect one.
+    """
     client = anthropic.Anthropic()
     system = SYSTEM_PROMPT.format(today=date.today().isoformat())
     messages = [{"role": "user", "content": question}]
@@ -104,7 +109,9 @@ def ask(question, verbose=True):
             if block.type != "tool_use":
                 continue
 
-            if verbose:
+            if on_tool_call:
+                on_tool_call(block.name, block.input)
+            elif verbose:
                 args = ", ".join(f"{k}={v!r}" for k, v in block.input.items())
                 print(f"  -> {block.name}({args})")
 
