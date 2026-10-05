@@ -13,7 +13,9 @@ from datetime import date
 
 import anthropic
 
-from email_tools import get_email, list_labels, search_emails
+from email_tools import (get_email, list_labels, read_categories,
+                         search_emails, summarise_senders,
+                         summarise_subjects)
 from tool_schemas import TOOLS
 
 MODEL = "claude-sonnet-4-6"
@@ -28,6 +30,9 @@ DISPATCH = {
     "search_emails": search_emails,
     "get_email": get_email,
     "list_labels": list_labels,
+    "summarise_senders": summarise_senders,
+    "summarise_subjects": summarise_subjects,
+    "read_categories": read_categories,
 }
 
 SYSTEM_PROMPT = """You are an assistant with read-only access to the user's \
@@ -44,8 +49,13 @@ calling a tool.
 the very message they meant.
 - If a request is ambiguous or you lack information you cannot look up, say \
 so and ask, rather than guessing.
+- Prefer the summarising tools over search for questions about volume or \
+clutter. read_categories is free and already grouped; reach for it first \
+when the question is about what is filling the inbox.
 - You have read-only access. You cannot send, delete, archive or label \
-anything. If asked to, say plainly that you cannot.
+anything. Archiving is done by a separate script the user runs themselves, \
+where they approve each batch: if they want to clear mail, tell them to run \
+'python clear_bulk.py'. Never claim to have archived anything.
 
 Answer in plain prose. Be concise."""
 

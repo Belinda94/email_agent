@@ -179,4 +179,114 @@ LIST_LABELS_SCHEMA = {
 }
 
 
-TOOLS = [SEARCH_EMAILS_SCHEMA, GET_EMAIL_SCHEMA, LIST_LABELS_SCHEMA]
+
+
+SUMMARISE_SENDERS_SCHEMA = {
+    "name": "summarise_senders",
+    # Counts, not messages. Asked "who fills my inbox", searching and
+    # listing would return twenty subject lines from one sender; this
+    # returns every sender with totals.
+    "description": (
+        "Group the inbox by sender and return counts, newest first. Returns "
+        "each sender's address, display name, how many messages they sent, "
+        "and a couple of example subjects. Use this for questions about "
+        "volume or clutter - who sends the most, what is filling the inbox - "
+        "rather than search_emails, which returns individual messages. "
+        "Addresses on the same domain are flagged as related, so a sender "
+        "using two subdomains is visible as one."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Optional text filter, same as search_emails.",
+            },
+            "label": {
+                "type": "string",
+                "description": (
+                    "Limit to one Gmail label. Call list_labels first to "
+                    "get a name that exists."
+                ),
+            },
+            "after": {
+                "type": "string",
+                "description": "YYYY-MM-DD. Only count mail sent on or after this date.",
+            },
+            "before": {
+                "type": "string",
+                "description": "YYYY-MM-DD, exclusive.",
+            },
+        },
+        "required": [],
+    },
+}
+
+
+SUMMARISE_SUBJECTS_SCHEMA = {
+    "name": "summarise_subjects",
+    # One sender is often several kinds of mail. A bank sends statements,
+    # promotions and action-required notices from one address.
+    "description": (
+        "Break one sender's mail down by subject pattern. Returns the "
+        "distinct kinds of mail that sender sends, with a count and a real "
+        "example of each, rather than the individual messages - a sender "
+        "with 500 emails typically has under 25 patterns. Use this after "
+        "summarise_senders when the question is what KIND of mail someone "
+        "sends, or whether all of it is the same thing."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "sender": {
+                "type": "string",
+                "description": (
+                    "The sender to break down, as an address or partial "
+                    "match. Take it from a summarise_senders result rather "
+                    "than guessing."
+                ),
+            },
+            "after": {
+                "type": "string",
+                "description": "YYYY-MM-DD. Optional lower bound.",
+            },
+            "before": {
+                "type": "string",
+                "description": "YYYY-MM-DD, exclusive. Optional upper bound.",
+            },
+        },
+        "required": ["sender"],
+    },
+}
+
+
+READ_CATEGORIES_SCHEMA = {
+    "name": "read_categories",
+    # Cached, so it is cheap and - more importantly - it is the same
+    # grouping the approval step acts on.
+    "description": (
+        "Read the saved breakdown of the inbox: every significant sender "
+        "with their mail sorted into named categories, and whether each "
+        "category is something the user would want to see or is bulk. This "
+        "is pre-computed, so it is fast and costs nothing. Use it for any "
+        "question about what is cluttering the inbox or what could be "
+        "cleared. Returns null if the breakdown has not been built yet, in "
+        "which case tell the user to run 'python categorise_all.py build' - "
+        "you cannot build it yourself."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
+
+TOOLS = [
+    SEARCH_EMAILS_SCHEMA,
+    GET_EMAIL_SCHEMA,
+    LIST_LABELS_SCHEMA,
+    SUMMARISE_SENDERS_SCHEMA,
+    SUMMARISE_SUBJECTS_SCHEMA,
+    READ_CATEGORIES_SCHEMA,
+]
